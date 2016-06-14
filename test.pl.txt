@@ -1,0 +1,1100 @@
+#========================================================================================================================================================
+#  Task 	: Perl Script 
+#  
+#  Filename 	: test.pl
+#
+#========================================================================================================================================================
+#
+#  Description	: Perl script to assist user in running single test cases or regression lists using cadence sim tool.
+#
+#========================================================================================================================================================
+#
+#========================================================================================================================================================
+#Libraries Used.
+#========================================================================================================================================================
+
+use strict;
+use warnings;
+use Getopt::Long;					#Getopt::Long is used for command line arguments while executing the perl script.
+use feature 'state';					#Feature 'state' is like static in C, statements with 'state' will execute only once.
+use Switch;						#Switch is equivalent to case statements.
+use POSIX qw(strftime);					#strftime is used to get the current time in any desired format.
+use Cwd;						#cwd() returns the current working directory in which the perl script is executing.
+use File::Path qw(make_path remove_tree);		# To create or remove any directory.
+use File::Copy::Recursive qw(fcopy dircopy);		#fcopy and dircopy are used to copy files or directories respectively
+use Spreadsheet::ParseExcel;				#ParseExcel is used to read data from rows and columns from excel worksheets.
+use Spreadsheet::ParseExcel::SaveParser;		#SaveParser is used to dynamically update the excel when the script is running
+use Spreadsheet::WriteExcel;				#WriteExcel is used to write data in rows and columns 
+
+
+#========================================================================================================================================================
+# Validity Variables Used for test and regression.
+#========================================================================================================================================================
+
+my $valid_test 	= 'nil';				#Flag to keep track if the single test case option is selected by the user.
+my $valid_reg  	= 'nil';				#Flag to keep track if the regression option is selected by the user.
+my $retest 	= 0;					#$retest keeps track of the number of times each test_case is to be run.
+my $select 	= 'none';				#$select is used to switch betweem compile, test or regression mode.
+
+#========================================================================================================================================================
+#Variables to store the IRUN commands for test and regression.
+#========================================================================================================================================================
+
+my $cmd_reg='';
+my $cmd_test='';
+
+#========================================================================================================================================================
+#OPTIONS- These variables are used to store all the required options for test and regression.
+#========================================================================================================================================================
+my $reg_file;							# $reg_file is used to store the regression file list.
+my $uvm_verbosity = 'nil';					
+my $seed = 'nil';
+my $stop_time ='nil';
+my $test_name_single;						# $test_name_single is used to store a single test case name.
+my $frtl;							# $frtl is use to store the rtl file list. 
+my $ftb;							# ftb is used to store the testbench filelist.
+my $tool;							# Holds the tool name - ncsim, vcs, modelsim.
+my $inclist;							 
+my $vtimescale;
+my $deflist = 'nil';
+my $sim_mode;
+my $gui ='nil';
+my $dump = 'nil';
+my $log = 'nil';		
+my $log_status = 'passed';					# It holds the status of the log file as either passed or failed.
+
+#========================================================================================================================================================
+#To read from a recevied file the mandatory and optional options for test and regression and store them in an array @option_array
+#========================================================================================================================================================
+sub retrieve
+
+{
+	my @option_array,my $rcv_fh,my $row,my $rcv_file=$_[0];
+	open($rcv_fh,'<',$rcv_file) or 
+	die " The file $rcv_file does not exist. Copy it from the orginal script folder\n";
+	while( $row =<$rcv_fh>)
+	{	
+		chomp($row);
+		push(@option_array,$row);
+	}
+	return @option_array;
+}
+
+#========================================================================================================================================================
+#Passs the text files which hold the Mandatory and optional options and store them in their respective arrays
+#========================================================================================================================================================
+	
+my @mandatory_single=retrieve('mandatory_single.txt');
+my @mandatory_regression= retrieve('mandatory_regression.txt');
+my @mandatory_compile= retrieve('mandatory_compile.txt');
+my @optional_single=retrieve('optional_single.txt');
+my @optional_regression=retrieve('optional_regression.txt');
+my @single_options=(@mandatory_single,@optional_single);
+my @regression_options=(@mandatory_regression,@optional_regression);
+my @received_options;						#This array holds all the options entered by the user.
+
+#========================================================================================================================================================
+#Directories.
+#========================================================================================================================================================
+my $top_dir;							# Stores the path of the ..../verification directory of the root projet structure.
+my $current_dir;						# Stores the path of the ..../ scripts directory .
+my $log_dir;							# Stores the path of the ..../ logs directory .
+my $sim_dir;							# Stores the path of the ..../ sims directory .
+my $workbook;							# Stores the excel workbook name which holds the final excel report
+my $worksheet1;					
+my $rw = 2;							# To keep track of the $row_count while entering data into the excel worksheet
+my $report_file;						# To store the excel report.
+
+#========================================================================================================================================================
+#Initialising the paths to the different directory variables accordingly
+#========================================================================================================================================================
+
+$current_dir = cwd();
+my @temp=split('/',$current_dir); 
+pop(@temp);
+$top_dir=join('/',@temp);
+$sim_dir=$top_dir."/sim_dir";
+$log_dir=$top_dir."/logs";
+
+#========================================================================================================================================================
+#This method receives the different options specified below, from the command line when the script is executed.
+#As and when the user enters a particular option, the script jumps to the corresponding subroutine and executes the task in it.
+#========================================================================================================================================================
+
+GetOptions( 	"regression=s"		=>\&regression,
+	    	"test=s"		=>\&test,
+	     	"uvm_verbosity=s"	=>\&uvm_verbosity,
+		"seed=s"		=>\&seed,
+		"stop_time=s"		=>\&stop_time,
+		"frtl=s"		=>\&frtl,
+		"ftb=s"			=>\&ftb,
+		"tool=s"		=>\&tool,
+		"inclist=s"		=>\&inclist,
+		"dump=s"		=>\&dump,
+		"vtimescale=s"		=>\&vtimescale,
+		"log=s"			=>\&log,
+		"gui"			=>\&gui,
+		"deflist=s"		=>\&deflist,
+		"sim_mode=s"		=>\&sim_mode,	
+	    	"help=s"		=>\&help,) or help();	# If any user options are not in the list or if there are no options specified for an option.
+								# An error is thrown accodrdingle and The help file is called and the program dies.
+
+#========================================================================================================================================================
+#This subroutine validates if the received  file or directory  argument exists
+#========================================================================================================================================================
+
+sub file_exist
+
+	{
+		if (-e $_[0])							# Checks if the file exists.
+		{  
+			if(-R $_[0]){}						# Checks if the file is readable.
+			else
+			{
+				die "\n\nError:File $_[0] is not readable.\n";
+			}
+		}				
+		else	
+                {
+	       		die "\n\nError:File :$_[0] does not exist.\n";          # Error thrown if it is otherwise.
+		}	
+	}
+
+#========================================================================================================================================================
+# Depending on the received options or options entered by the user, these subroutines are called.
+#========================================================================================================================================================
+sub regression
+	{	
+		$valid_reg = 'true';			# This flag is used as an indication that the user entered regression.
+		$select = 'reg';			# The mode of operation is selected as regression.
+		$reg_file=$current_dir.'/'.$_[1];	# Appending the full path to the regression file.
+		file_exist($reg_file);			# Checking if the regression filelist file exists and if it is readable
+		$reg_file=$_[1];			# Storing the regress filelist name without the whole path , to create the sim_dir later.
+		push(@received_options,$_[0]);		# Storing the received option regression in an array.
+		
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub test
+	{
+		
+		$valid_test='true';			# This flag is used as an indication that the user entered regression.
+		$select='test';				# The mode of operation is selected as regression.
+		$test_name_single=$_[1];		# The single test case name is stored in this variable.
+		push(@received_options,$_[0]);		# Storing the received option test in an array.
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub uvm_verbosity
+	{
+		$uvm_verbosity= $_[1];			# The uvm_verbosity value is stored in this array.
+		push(@received_options,$_[0]);		# Storing the received option uvm_verbostiy in an array.
+	}
+#---------------------------------------------------------------------------------------------------------
+sub gui
+	{
+		$gui = $_[1];				# The gui is set in this variable.
+		push(@received_options,$_[0]);		# Storing the received option gui in an array.
+		
+	}
+
+
+#---------------------------------------------------------------------------------------------------------
+sub seed
+	{
+		$seed = $_[1];				# The seed value is stored in this variable.
+		push(@received_options,$_[0]);		# Storing the received option seed in an array.
+	}
+#---------------------------------------------------------------------------------------------------------
+
+sub stop_time
+	{
+		$stop_time = $_[1];			# The simulation stop time is stored in this variable.
+		push(@received_options,$_[0]);		# Storing the received option stop_time in an array.
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub dump
+	{
+		$dump=$current_dir.'/'.$_[1];		# Appending the full path to the .tcl file
+		push(@received_options,$_[0]);		# Storing the received option dump in an array
+		my $dump_fh;				# Printing exit as the last line in the tcl file.
+		open($dump_fh,'>',$_[0]);
+		print $dump_fh "\nexit";
+		close $dump_fh;
+		
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub log
+	{
+		$log = $_[1];				# The log file name is stored in this variable
+		push(@received_options, $_[0]);		# Storing the received option log in an array
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub vtimescale
+	{	
+		$vtimescale = $_[1];			# The vtimescale is stored in this variable.
+		push(@received_options,$_[0]);		# Storing the received option vtimescale in an array
+
+	}
+#---------------------------------------------------------------------------------------------------------
+sub inclist
+	{
+				
+		$inclist = $_[1];				# The inclist file is saved in this variable.
+		$inclist=$current_dir.'/'.$inclist;		# The full path is prepended to the inclist file name.
+		file_exist($inclist);				# Checking if the inclist filelist file exists and if it is readable.
+		push(@received_options,$_[0]);			# Storing the received option inclist inclist in an array.
+	}
+#-----------------------------------------------------------------------------------------------------------------------------------
+sub deflist 
+	{
+				
+		$deflist = $_[1];				# The deflist file is daved in this variable.
+		$deflist=$current_dir.'/'.$deflist;		# The full path is prepended to the deflist file namne.
+		file_exist($deflist);				# Checking if the define filelist file exists and if it is readable
+		push(@received_options,$_[0]);			# Storing the received option deflist in an array.
+	}
+
+#---------------------------------------------------------------------------------------------------------
+sub ftb
+	{
+
+		$ftb = $_[1];					# The TB filelist is saved in this variable
+		$ftb =$current_dir.'/'.$ftb;			# The full path is prependede to this TB filelist.
+		file_exist($ftb);				# Checking if the TB filelist file exists and if it is readable.
+		push(@received_options,$_[0]);			# Storing the received option ftb  in an array
+		
+	}
+
+#------------------------------------------------------------------------------------------------------------------------------------
+sub frtl
+	{
+
+		$frtl = $_[1];					# The RTl filelist file is saved in this variable.
+		$frtl=$top_dir."/dut/".$frtl;			# The full path is prepended to the RTl filelist file.
+		file_exist($frtl);				# Checking if the RTL filelsit file exists and if it is readable.
+		push(@received_options,$_[0]);			# Storing the received option in an array.
+		
+	}
+#------------------------------------------------------------------------------------------------------------------------------------
+sub sim_mode
+	{	
+		my @legal_sim_mode = qw(rtl_sim compile);				# This array contains the values which are allowed as arguements for the sim_mode option.
+		$sim_mode=$_[1];							# The sim_mode is saved in this variable.
+		if (grep { $_ eq $sim_mode } @legal_sim_mode)				# This checks if the received option is valid and allowed option or not
+		{									# Currently only rtl_sim and compile are funcitonal, and accordingly
+											# log and sim dirs are appended, the gate and cov simulations can be added.
+			switch($sim_mode)						
+			{
+				case 'compile'  {	$select='compile';		
+							$sim_dir=$sim_dir.'/rtl_sim'; 	
+							$log_dir=$log_dir.'/rtl_sim';	
+						}
+				case 'rtl_sim'  {	$sim_dir=$sim_dir.'/rtl_sim';	
+							$log_dir=$log_dir.'/rtl_sim';
+						}
+				 
+			}
+			push(@received_options,$_[0]);					# The recevied option sim_mdoe is stored in the array.
+		}
+		else
+		{
+			print "\n Error: Wrong option for sim_mode.\n Specify one of the following @legal_sim_mode\n";	# Error message is printed if the receved option argument is not valid and the program dies.
+			die("\n");
+		}
+	}
+#---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+sub tool
+	{
+	my @legal_tool = qw(modelsim ncsim vcs);		# These are the allowed options for tool.
+	if ( grep { $_ eq $_[1] } @legal_tool)			# The user entered value is compared with the legal/allowed values.
+	{
+	
+		$tool=$_[1];					# The tool value is stored in this variable.
+		push (@received_options,$_[0]);		     	# Storing the received option tool in an array
+	}
+	else
+	{
+		print "\nerror: must specify one of the following argumentsfor \"-tool \" \n@legal_tool\n"; 	#Error message is printed if the user enters an invlaid value allowed for tool.
+		die "\n";
+	}
+
+
+	}
+
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+sub help
+
+	{
+		my $help_text=$current_dir.'/help.txt';			# Prepends the full path to the help,txt file.
+		file_exist($help_text);					# Checls if the help file exists.
+		system("cat $help_text");				# Displays the help fiule on the console file.
+		die("\n");						# Kills the program.
+	}
+
+#======================================================================================================================================================================================
+# DATE AND TIME
+#This subroutine is used to return date and time in the @return array.
+#It is currently not used and can be used if needed, as the sim date and time 
+#is grepped from the irun.log file itself.
+#======================================================================================================================================================================================
+sub get_date_time	
+
+	{
+		my $date=strftime "%d-%m-%Y",localtime;		# Command to retrieve  date in ddmmyyy format.
+		my $time=strftime "%T",localtime;		# Command to retrive time.
+		my @time=split(' ',$time);			
+		my @return;
+		push(@return,$date);
+		push(@return,$time[0]);
+		return @return;					# Returns the date and time found.
+		}
+
+
+#======================================================================================================================================================================================
+# MISSING_SINGLE_TEST
+# This is to check if any mandatory options for single test are not specified 
+#======================================================================================================================================================================================
+sub missing_test
+	{
+			my @missing;											# Array to store the missing mandatory options 
+			foreach my $variable(@mandatory_single)			
+				{				
+					push (@missing,$variable) unless grep { $_ eq $variable } @received_options;	# If any of the mandatory options are not in the received list of options, they are pushed to @missing.
+				}		
+			if(scalar @missing != 0)									# If there are missing options, print Error message.				
+				{
+					print "\nError:Mandatory Options to run a single test is not specified.\nThe missing options is/are @missing.\n"; 
+					help();
+				}		
+
+			foreach my $variable (@received_options)							# If any variable in the revceived option list is not optional for single test, an error is thrown.
+				{
+	
+					print "\nError:The option specified $variable is not a valid optional variable for single.\n" and help()  unless grep { $_ eq $variable } @single_options;
+
+				}
+
+	}
+
+#======================================================================================================================================================================================
+# MISSING_REGRESSION_TEST
+# This is to check if any mandatory options for regression test are not specified
+#======================================================================================================================================================================================
+
+sub missing_reg
+	{
+
+			my @missing;											# Array to store the missing mandatory options
+			foreach my $variable(@mandatory_regression)
+				{
+				push(@missing,$variable) unless grep { $_ eq $variable } @received_options;		# If any of the mandatory options are not in the received list of options, they are pushed to @missing.
+
+				}
+			if(scalar @missing != 0)									# If there are missing options, print Error message.				
+			{	
+					print "\nError:Mandatory Options to run a regression test is not specified.\nThe missing option is/are @missing.\n";
+					help();
+			}
+
+			foreach my $variable (@received_options)							# If any variable in the revceived option list is not optional for single test, an error is thrown.
+				{
+	
+					print "\nError:The option specified $variable is not a valid optional variable for regression test.\n" and help() unless grep { $_ eq $variable } @regression_options;
+					
+				}
+
+
+	}
+
+
+#======================================================================================================================================================================================
+# MISSING_COMPILE_TEST
+# This is to check if all mandatory options for compile mode are specified or not
+#======================================================================================================================================================================================
+sub missing_compile
+	{
+		my @missing;											# Array to store the missing mandatory options
+		foreach my $variable(@mandatory_compile)
+			{
+				push (@missing,$variable) unless grep {$_ eq $variable } @received_options;	# If any of the mandatory optins are not in the received list of options, they are pushed to @missing
+		
+			}
+		if(scalar @missing != 0)									# If there are missing options print the Error Measage
+			{
+				print "\n Error : Mandatory options to compile the test are not specified\n. The missing options is/are @missing \n";
+				help();
+			}
+	
+	
+	
+	
+	}
+
+#======================================================================================================================================================================================
+#INITIALIZE THE DIRECTORY
+# This initializes the sim_directory and the logs directory
+#======================================================================================================================================================================================
+sub init_dir
+	{	
+		my $sub_dir_name = $_[0];							# Receive the sub_directory name . Eg : reglist_8.fl, reglist_16.fl, single_test.
+		if (($select eq 'compile' and $valid_reg eq 'true') or ($select eq 'reg'))	# If not compile and not single test, in other words if only regression: then chop ".fl" extention.
+		{
+			chop ($sub_dir_name);
+			chop ($sub_dir_name);
+			chop ($sub_dir_name);
+		}
+		$sim_dir=$sim_dir.'/'.$sub_dir_name;						# Prepend the entire path to the received sub_directory_name.
+		if (-e $sim_dir)								# Check if the sub_directory exists.
+		{	
+			chdir $sim_dir;								# Change directory to the sub_dir.
+			opendir (my $dh, $sim_dir) or die "failed \n";				# open a Directory file handle.
+
+
+			my @dirs = grep { -d "$sim_dir/$_" && ! /^\.{1,2}$/ } readdir ($dh);	# read all the direcotries in it into @dirs array.
+
+				foreach my $dir_name ( @dirs)		
+				{	
+					if ( ($dir_name ne 'common_libs') )			# Remove all directories except the common_libs.
+					{
+						remove_tree("$dir_name");
+					}
+				}
+
+
+		}
+		else										
+		{	
+			make_path ($sim_dir);							# If sub_directory does not exist, create it.
+		}
+		$log_dir=$log_dir.'/'.$sub_dir_name;						# Prepend the entire path to the log_sub_directory.
+		if (-e $log_dir)								# Check if it exists
+		{
+			remove_tree ( $log_dir );						# If it does , clear all data in it by deleting it.
+		} 
+		
+			
+		make_path ($log_dir ); 								# Re-create it . create failed, passed and report directories inside of it.
+		
+		my $failed = $log_dir.'/failed';						
+		my $passed = $log_dir.'/passed';
+		my $report = $log_dir.'/report';
+
+		make_path("$failed");
+		make_path("$passed");
+		make_path("$report");
+
+		
+		chdir $current_dir;								#Change back to current direcotry.
+	}
+
+
+#======================================================================================================================================================================================
+#Create a directory for the corresponding test_name
+#======================================================================================================================================================================================
+sub create_dir_test_name
+	{
+		my $test_name = $_[0];
+		make_path ("$sim_dir/$test_name");
+	}
+
+#======================================================================================================================================================================================
+#CREATE_LOG
+#To copy the log file generated to the log file folder and grep the required info and save it in report.xls
+#======================================================================================================================================================================================
+sub create_log		
+	{
+		my $test_name_single=$_[0];						# Store the test case name in this variable.
+		my $test_dir_name=$_[1];						# Store the sub_simulation_directory name in this varaible.
+		my $log_irun_dir=$sim_dir.'/'.$test_dir_name;			
+		chdir $log_irun_dir or die "Failed to change to $log_irun_dir\n";	# Navigate to the directory where the simulation is taking place.	
+		if ( $log ne 'nil')							# If User has specified log name through options change the log file name.
+		{
+			$test_name_single = $log;
+		}
+		
+		
+#Opening and reading the log file----------------------------------------------------------------------------------------------------------------------------------------------------
+		
+		my @log_list;
+		my $log_fh;
+		my $irun_log_file = $log_irun_dir.'/'.$test_name_single;
+		file_exist("$irun_log_file");
+		open($log_fh,"$irun_log_file");
+		@log_list=<$log_fh>;
+#CPU Usage---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+		my $cpu_use=retrieve_log_info(@log_list,"CPU Usage","Usage",2,'end');		
+		if ($cpu_use eq '')
+		{	
+			print " NO CPU INFO, RETURNING 0\n";
+			return 0;
+		}
+#Start Time and Date----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+		my $start_time=retrieve_log_info(@log_list,"Started on","at",1,2);			
+		my $start_date=retrieve_log_info(@log_list,"Started on","at",-3,0);		
+#Stop Time and Date------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+		
+		
+		my $end_time=retrieve_log_info(@log_list,"Exiting on","at",1,2);		
+		my $stop_date=retrieve_log_info(@log_list,"Exiting on","at",-3,0);				
+		my $tot_sim=retrieve_log_info(@log_list,"Exiting on","at",4,5);		
+		chop $tot_sim;
+
+		
+#Get SVSEED VALUE--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+		my $match="SVSEED";
+		
+		my $seed = '';
+		my @match = grep /$match/,@log_list;
+	
+		@match=split('',$match[0]);
+		my $count,my $stall;
+		foreach my $b(@match)
+		{	
+		
+			if ($b eq ':')
+			{
+			  $stall=$count;
+			#	copy_back_INCA_libs($test_dir_name);
+			}
+			$count ++;
+		}
+
+		for ($count = ($stall+2); $count < scalar @match; $count ++)
+
+		{	
+			$seed=$seed.$match[$count];		
+		}
+		
+		$seed =~ s/|s+$//;
+		chomp $seed;	
+	
+	
+		
+		
+#Update the excel filee-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+		my $parser = Spreadsheet::ParseExcel::SaveParser->new();
+		my $wb = $parser->Parse("$report_file");
+		my $wk = $wb->worksheet(0);
+
+		#$wk->add_write_handler(qr[\w], \&store_string_widths);	# This is a write handler which is used in the auto set width of a column , it says write handler not
+
+		my $cw = 1;
+		$wk->AddCell($rw,$cw++,$rw-1);
+		$wk->AddCell($rw,$cw++,$test_name_single);
+		$wk->AddCell($rw,$cw++,$log_status);
+		$wk->AddCell($rw,$cw++,$cpu_use);
+		$wk->AddCell($rw,$cw++,$start_time);
+		$wk->AddCell($rw,$cw++,$end_time);
+		$wk->AddCell($rw,$cw++,$tot_sim);
+		$wk->AddCell($rw,$cw++,$seed);
+		$wk->AddCell($rw,$cw++,$start_date);
+		$wk->AddCell($rw,$cw++,$stop_date);
+		$rw++;
+		$wb->SaveAs("$report_file");
+		
+
+		print "DONE  \n";
+#Create and copy the log file------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+		
+		my $log_name=$test_name_single."_".$seed."_".$stop_date."_".$end_time.'.log';		
+		my $log_final_file =$log_dir.'/'.$log_status.'/'.$log_name;	
+		fcopy("$irun_log_file","$log_final_file") or die "Failed copy of irun.log\n";
+		return 1;	
+	}
+
+
+
+#======================================================================================================================================================================================
+#RETRIVE_LOG_INFORMATION
+# This subroutine is called to retrieve all the log information from the file
+#======================================================================================================================================================================================
+sub retrieve_log_info
+	{
+		my $count = 0;
+		
+		my $pos_end = pop (@_);
+		my $pos_start = pop (@_);
+		my $pos_string = pop (@_);
+		my $match = pop (@_);
+		my @log_list = @_;
+		my $stall;
+		
+		my $log_info='';
+
+		my @match = grep /$match/,@log_list;
+	if(scalar @match > 0)
+	{
+		@match=split(' ',$match[0]);
+		foreach my $b(@match)
+		{	
+			if ($b eq $pos_string)
+			{
+			  $stall=$count;
+			  
+			}
+			$count ++;
+		}
+		
+		if ($pos_end eq 'end')
+		{
+			$pos_end = (scalar @match) - 2;
+
+		}
+		for ($count = ($stall+$pos_start); $count < ($stall + $pos_end); $count ++)
+
+			{				$log_info=$log_info.' '.$match[$count];		
+			
+			}
+	}
+		return $log_info;	
+	}
+
+
+
+#======================================================================================================================================================================================
+# COMPILE TEST
+#To create compile_ncsim.sh file and compile it
+#======================================================================================================================================================================================
+sub compile_test
+	{
+		my $cmd_test_copy=$_[0];
+		my $reg_name=$_[1];
+		my $test_dir=$sim_dir.'/common_libs';	#CAHNGE
+		if (-e $test_dir)
+		{
+			chdir "$test_dir";
+			goto COMPILE;
+			
+		}
+		else
+		{
+			make_path ("$test_dir");
+			chdir $test_dir;
+	COMPILE:	 	
+			my $op_fh,my $op_file="compile_ncsim.sh";
+			open($op_fh,'>',$op_file);
+			print $op_fh "#!/bin/sh\n";
+			print $op_fh "IUS_HOME=`ncroot`\n";
+			print $op_fh $cmd_test_copy.'-elaborate $*';
+			close $op_fh;
+			my $mode = 0777;
+			chmod $mode, "$op_file";
+			system ("./$op_file");	
+			chdir "$current_dir";
+	
+		}
+
+		
+	}
+
+#======================================================================================================================================================================================
+# NUMBER OF RUNNING JOBS
+#Check to check the number of running jobs.
+#======================================================================================================================================================================================
+sub no_of_running_jobs
+	{	
+	my $user = $ENV{"USER"};
+	my $num_jobs = `qstat | grep "$user" | wc -l `;
+	return $num_jobs;
+	}
+
+sub log_grep
+	{
+		my $test_sub_dir=$_[0];
+		my $test_dir=$sim_dir.'/'.$test_sub_dir;
+		
+		chdir "$test_dir";
+
+		my @log_files = `ls | grep ".log"`;
+	
+		foreach my $log(@log_files)
+		{	
+			print "$log log is grepped \n";
+			chomp $log;
+			open(my $fh,"+<",$log);
+			
+			my $log_complete=create_log($log,$test_sub_dir);	#copy log file
+			
+			unlink $log if $log_complete;			#remove the log file
+		}
+	}
+
+
+#======================================================================================================================================================================================
+#To run the compile_ncsim.sh file---------------------------------------------------------------------------------------------------------------------------------------------
+sub run_test
+	{
+		my $cmd_test_copy=$_[0];
+		my $test_sub_dir =$_[1];
+		my $test_name    =$_[2];
+
+
+		my $test_dir=$sim_dir.'/'.$test_sub_dir;
+		chdir "$test_dir";
+		my $op_fh,my $op_file = $test_name.".sh";
+		open($op_fh,'>',$op_file);
+		print $op_fh "#!/bin/sh\n";
+		print $op_fh "IUS_HOME=`ncroot`\n";
+		print $op_fh "cd $test_dir\n";
+		print $op_fh $cmd_test_copy.'-R -nclibdirname '.$sim_dir.'/common_libs/INCA_libs '.'-log '.$test_name.'.log $*';
+		close $op_fh;
+		my $mode = 0777;
+		chmod $mode, "$op_file";
+		
+		if ($select eq 'reg')
+		{
+			SLEEP :
+			my $check = no_of_running_jobs();	# Wait/sleep if three jobs are currently running
+			if ($check == 3)		
+			{
+		#		print "Sleeping \n"; 
+				goto SLEEP;
+			}
+			system ("qsub $op_file");		# Submit job if slot is available
+			log_grep($test_sub_dir);
+		}
+		else
+		{
+			system ("./$op_file");	
+		}
+			
+		chdir "$current_dir";
+
+		
+	}
+
+# This subroutine is called if the single test option is entered by the user------------------------------------------------------------------------------
+
+sub single_test
+	{
+		init_dir('single_test');				#To inititalize the sim_dir and the log_dir and its sub directories
+		$report_file=create_report();				# To create the initial templete of the report with the required headings.
+		compile_test($cmd_test,$reg_file);			# To create common_libs or check if it exists and to elaborate the design.
+		create_dir_test_name($test_name_single);		# Creating the directory Top_test.
+		run_test($cmd_test,$test_name_single,$test_name_single);# It goes into the above created directory and runs the command.
+		create_log($test_name_single.'.log',$test_name_single);	# Reads all the info from log file seed, date , time , status, cpu usage and appends it to excel file and saves the log file in the appropriate direcotry
+		
+		
+	}
+
+
+
+#This subroutine is called if the regression test option is entered by the user.----------------------------------------------------------------------------
+
+sub reg_test
+	{
+		init_dir($reg_file);
+		$report_file=create_report();
+		my $row, my $reg_fh,my @cmd_reg;
+		open($reg_fh,'<',$reg_file);
+		my $append = $cmd_reg;
+		while($row = <$reg_fh>)		# Read each testfile line in the reglist file
+		{	
+			state $boolean='compile';
+			my @rcv_row=split(' ',$row);
+			my $arr_count = 0;
+			my $cmd_reg = $append;
+			my $retest=0;
+			my $test_name;
+			foreach my $var(@rcv_row)
+			{	
+				switch($var)
+						{
+						case 'testname' 	{
+#										print "$arr_count , $rcv_row[$arr_count] , $rcv_row[($arr_count+2)] \n";
+										$test_name=$rcv_row[($arr_count+2)];
+										$cmd_reg=$cmd_reg."+UVM_TESTNAME=$rcv_row[($arr_count+2)] ";
+										
+									}
+
+						case 'UVM_TIMEOUT'	{
+			
+#										print "$arr_count , $rcv_row[$arr_count] , $rcv_row[($arr_count+2)] \n";
+										if ( $stop_time eq 'nil' )
+										{
+											$stop_time = $rcv_row[($arr_count+2)];
+										}
+										
+										$cmd_reg=$cmd_reg."+UVM_TIMEOUT=$stop_time ";
+								  	}	
+						case 'UVM_VERBOSITY'	{
+
+#										print "$arr_count , $rcv_row[$arr_count] , $rcv_row[($arr_count+2)] \n";
+										if ( $uvm_verbosity eq 'nil' )
+										{
+											$uvm_verbosity = $rcv_row[($arr_count+2)];
+										}
+
+										$cmd_reg=$cmd_reg."+UVM_VERBOSITY=$uvm_verbosity ";
+									}
+						case 'seed'		{
+
+#										print "$arr_count , $rcv_row[$arr_count] , $rcv_row[($arr_count+2)] \n";
+										if ( $seed eq 'nil' )
+										{
+											$seed = $rcv_row[($arr_count+2)];
+										}
+										$cmd_reg=$cmd_reg."+svseed=$seed ";
+									}			
+
+						case 'retest'		{
+
+#										print "$arr_count , $rcv_row[$arr_count] , $rcv_row[($arr_count+2)] \n";
+										$retest = $rcv_row[($arr_count+2)];
+									}
+
+					}
+
+				$arr_count++;
+
+			}		
+
+			
+			
+			while ($retest >= 0)
+			{
+
+			create_dir_test_name('sim_common');	# Pass $test_name as second argument if individual/ separate directories are needed for each test case else pass sim_common
+			if($boolean eq 'compile')				# Elaborate only once 
+			{
+				compile_test($cmd_reg,$reg_file);
+			}
+			$boolean = 'run';
+			run_test($cmd_reg,'sim_common', $test_name.'_'.$retest);		# run the command,
+			$retest --;
+			
+			}
+			
+		}
+		
+
+			
+			SLEEP1:
+			my $check = no_of_running_jobs();	# Wait/sleep if three jobs are currently running
+			if ($check > 0)
+			{	print " END WAITING ... \n";
+				goto SLEEP1;
+			}
+				log_grep('sim_common');
+				
+	}
+
+
+#======================================================================================================================================================================================
+#EXCEL SHEET CODING
+#======================================================================================================================================================================================
+sub create_report
+	{	
+
+		my $report_file= $log_dir."/report/report_$sim_mode.xls";			#The report.xls file is created with the appropriate name and in the appropriate dir.
+		my $worksheet_label="report_$sim_mode";						# The worksheet is labelled.
+		my $cell_row= 1, my $cell_col=1;						# The cell row and cell col is set to the 2nd row and col respectively.
+		my @headings=( 	'  Sl No. ',							# These are the list of parametersz / headings which are required to be added in the excel sheet.
+				' Test Name ',
+				' Passed/Failed ',
+				' Cpu Usage Info ',
+				' Sim Start Time ',
+				' Sim End Time ',
+				' Sim Time ',
+				' Seed Value ',
+				' Test Start Date ',
+				' Test End Date ');
+
+		($workbook,$worksheet1) = get_book_and_sheet ($report_file,$worksheet_label);	# Creates new workbook and worksheet
+		make_header_row( $cell_row, $cell_col,@headings);				# Creates the basic templete with all the parameters in the excel sheet.
+												# The following are used to set the colum n width for each of the parameters.
+		$worksheet1->set_column('B:B',5);						# Sl no
+		$worksheet1->set_column('C:C',50);						# Test name
+		$worksheet1->set_column('D:D',12);						# Pass/fail
+		$worksheet1->set_column('E:E',60);						# Cpu
+		$worksheet1->set_column('F:F',15);						# Start TIme
+		$worksheet1->set_column('G:G',15);						# End time
+		$worksheet1->set_column('H:H',12);						# Sim time
+		$worksheet1->set_column('I:I',12);						# Seed
+		$worksheet1->set_column('J:J',17);						# Start date
+		$worksheet1->set_column('K:K',17);						# End date
+
+		$workbook->close; 								# Close the workbook.
+		return $report_file;								# Return the path and name of the excel file created.
+	}
+
+#======================================================================================================================================================================================
+#Creates the workbook and the worksheet.
+#======================================================================================================================================================================================
+sub get_book_and_sheet
+			{ 
+				my( $filename, $label) = @_; # only first run							
+				state $workbook  = Spreadsheet::WriteExcel->new( $filename ) or die "Cannot open excel file\n";	# Stat is used so that this statement executes only the
+				state $worksheet1 = $workbook->add_worksheet( $label ) or die "Cannot open excel file\n";	# first time subroutine is called.
+				($workbook, $worksheet1); 
+			} 
+
+			
+#======================================================================================================================================================================================
+#Workbook .copy.xlsx header writing
+#======================================================================================================================================================================================
+sub make_header_row
+			{ 
+				my( $row , $column , @headings ) = @_;	 			# Receive the row, col, and headings which are to be written in the excel file.
+				my( $workbook, $worksheet1) = get_book_and_sheet(); 		# Retrieve the workbook and worksheet name.				
+				my $format = header_format(); 					# Retrieve the format of the header from the header_format() sub.
+				$worksheet1->write( $row, $column++, $_,$format )  		# Write each parameter in each column, with the retireved format.
+				foreach @headings; 
+			} 
+
+#======================================================================================================================================================================================
+#Workbook .copy.xlsx header format
+#This subroutine is a self understandable and it defines the
+#format of the data which is to be entered in the excel sheet
+#and this $format can be utilized whenever a write operation takes place
+#======================================================================================================================================================================================
+sub header_format 
+			{ 
+				my( $workbook, $worksheet ) = get_book_and_sheet(); 
+				my $format = $workbook->add_format();  
+				$format->set_bold(); 
+				$format->set_bg_color('yellow'); 
+				$format->set_align('center');
+				$format; 
+			}
+
+#======================================================================================================================================================================================
+#   MAIN PROGRAM
+#======================================================================================================================================================================================
+
+
+#======================================================================================================================================================================================
+# This cheecks if the user has entered both the single test and regression options
+#======================================================================================================================================================================================
+
+if($valid_test eq 'true' and $valid_reg eq 'true')					
+	{
+		print (" Error: Cannot run both test and regression \n");
+		help();
+		
+	}
+
+#======================================================================================================================================================================================
+# This checks if the user has entered any option or not
+#======================================================================================================================================================================================
+if (scalar @received_options == 0)
+	{
+		print "\nError : No options received\n";
+		help();
+
+	}
+
+#======================================================================================================================================================================================
+#This appends the cmd_reg or cmd_test accordingly.
+#======================================================================================================================================================================================
+switch($tool)
+		{
+			case 'ncsim' 	{ 	$cmd_test="irun ".$cmd_test.'-uvmhome ${IUS_HOME}/tools/uvm -access +rwc -perfstat ';		# Appends the basic commmands when ncsim is selected.
+						if ( $valid_test eq 'true')									# If valid_test is true all the variables associated with single test are appended
+						{												# If they are " nil " they are not appended.
+							$cmd_test=$cmd_test."+UVM_TESTNAME=$test_name_single ";
+							$cmd_test=$cmd_test."-vtimescale $vtimescale ";
+							$cmd_test=$cmd_test."-F $frtl ";
+							$cmd_test=$cmd_test."+UVM_VERBOSITY=$uvm_verbosity " if ($uvm_verbosity ne 'nil');
+							$cmd_test=$cmd_test."-gui " if ($gui ne 'nil');
+							$cmd_test=$cmd_test."+svseed=$seed " if ( $seed ne 'nil');
+							$cmd_test=$cmd_test."+uvm_timeout=$stop_time " if ($stop_time ne 'nil');
+							$cmd_test=$cmd_test."-input $dump " if ($dump ne 'nil');
+						}
+						elsif ( $valid_reg eq 'true')									# If valid_reg is true , all the variables associated with regression tests are appended
+						{
+							$cmd_reg=$cmd_reg."-vtimescale $vtimescale ";
+						  	$cmd_reg="irun ".$cmd_reg.'-uvmhome ${IUS_HOME}/tools/uvm -perfstat '; 
+							$cmd_reg=$cmd_reg."-F $frtl ";
+						}
+
+						my $ftb_fh, my $row;										# The TB file lists are appended to the irun command.
+						open($ftb_fh,'<',$ftb);										# The filelist file is opened using a file handle.
+						while($row=<$ftb_fh>)										# Each row in the file is read.
+						{			
+							chomp $row;										# To remove any trainling new line characters.
+							$cmd_test=$cmd_test.$top_dir.'/'.$row." ";						
+							$cmd_reg=$cmd_reg.$top_dir.'/'.$row." ";
+						}
+						my $incl_fh;											#Similar procedure as above to add the inclist filelists
+						open($incl_fh,'<',$inclist);
+						while($row=<$incl_fh>)
+						{
+							chomp $row;
+							$cmd_test=$cmd_test."+incdir+".$top_dir.'/'.$row." ";
+							$cmd_reg=$cmd_reg."+incdir+".$top_dir.'/'.$row." ";
+		
+						}
+						if ($deflist ne 'nil')										# Similar procedure as above to add the deflist filelists.
+						{
+							my $df_fh;
+							open($df_fh,'<',$deflist);
+							while($row=<$df_fh>)
+							{
+								chomp $row;
+								$cmd_test=$cmd_test."+define+".$top_dir.'/'.$row." ";
+								$cmd_reg=$cmd_reg."+define+".$top_dir.'/'.$row." ";
+							}
+						}
+					}
+				
+			case 'modelsim' {													# Can be extended to provide support for the  mentor graphics tool.
+					}
+			case 'vcs' 	{ 													# Can be extended to provide support for the vcs tool.
+					}
+		}
+
+#======================================================================================================================================================================================
+# Based on the user entered option, the appropriate case is selected
+#======================================================================================================================================================================================
+
+switch ( $select )
+	
+	{
+
+	case 'test' 	{	
+				missing_test();					# To check if mandatory and optional options are given correctly for the single test case or not.
+				single_test();					# To compile and then run the test.
+
+			}
+	case 'reg'	{	
+				missing_reg();	 				# To check if mandatory and optional option are given correctly for regression case or not.
+				reg_test();					# To compile once and then run the test cases in the reglist parallely.
+				
+			}
+	case 'compile'	{
+				missing_compile();				# To check if the mandatory options are given correctly for compile case or not.
+				
+				if($valid_test eq 'true')
+				{	
+					init_dir('single_test');		# If single test, pass 'single test' to init dir sub routine - to create it in the sim_dir amd log_dir.
+					compile_test($cmd_test,$reg_file);	# The compile procedure is initiated and  executed.The irun command is passsed as an argument.
+				}
+				elsif ($valid_reg eq 'true')
+				{
+					init_dir($reg_file);			# If reg test, pass 'reg_file' to init_dir sub routine - to create it in the sim_dir and log_dir.
+					compile_test($cmd_reg,$reg_file);	# The compile procedure initiated and executed, the irun command and reg file are passed as arguments.
+				}
+				
+			}
+	case 'none'	{
+				print " Error : Specify Test or Regression\n";	# Test or regression option is not specified .
+				help();
+			}
+
+	}
+
+#======================================================================================================================================================================================

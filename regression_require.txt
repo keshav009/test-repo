@@ -1,0 +1,114 @@
+
+Options:
+
+Mandatory for single
+    -test                    :    Use this option to choose the testcase name for single simulation
+
+Mandatory for regression
+    -regression <TC_LIST>   :     Regression Mode Enabled, Run test case from a list
+      
+Mandatory for both single and regression
+    -fl   <FILE_LIST>       :     This option is mandatory, TB and RTL filelists
+    -tool <TOOL_OPTION>     :     Use this option to select the simulation tool
+                                    <TOOL_OPTION> options are given below.
+                                      1) modelsim : mentor simulation tool
+                                      2) ncsim    : cadence simulation tool
+                                      3) vcs      : synopsys simulation tool
+    -inclist  <INC_LIST>     :    This option is used to add the incdir list of the project
+    -sim_mode <SIM_MODE>     :    Use this option to select the simulation mode
+                                    <SIM_MODE> options are given below.
+                                       1) rtl_sim  : Run RTL simulation
+                                       2) gate_sim : Gate level simulation
+                                       3) cov_sim  : Coverage based simulation
+                                       4) compile : Compile Only
+   
+Optional for single
+    -gui                    :     Enable GUI Mode
+    -dump_nc                :     Enable wave form dump option for ncsim in single testcase gui mode
+    -dump                   :     Waveform dump option
+                                    1. VCD
+                                    2. wlf
+                                    3. Waves.shm
+    -seed                   :     Use this option to select the seed value
+
+Optional for regression
+    empty
+      
+Optional for both single and regression
+    -h                      :     prints this help menu.
+    -coverage               :     This options enables code coverage using any sim Tool
+    -deflist  <DEF_LIST>     :    This option is used to add all define statment of the current simulation
+    -log  <LOG_FILE>        :     Specify Log File Name
+    -uvm_verbosity          :     Use this option to select verbosity level
+                                  UVM_DEBUG   
+                                  UVM_FULL   
+                                  UVM_HIGH   
+                                  UVM_LOW   
+                                  UVM_MEDIUM   
+                                  UVM_NONE 
+    -sim_stop_tim            :    Simulation timeout time, Please mention in ps. ex) 1 ms = 1000000000 ps
+                                  If enable this option script need to
+                                  overwrite the default value with the sim_stop_tim i.e) +UVM_TIMEOUT=1000000000
+ 
+ 
+    e.g : for compilation
+    % run_test.pl -tool ncsim -sim_mode compile -fl file_list.fl
+
+    e.g for running rtl simulation using ncsim
+    % run_test.pl -tool ncsim -sim_mode rtl_sim -fl file_list.fl -test test_dut1
+
+    e.g for running rtl simulation regression mode
+    % run_test.pl -tool ncsim -sim_mode rtl_sim -fl file_list.fl -regression test_list.fl
+
+    e.g for running rtl simulation enabling coverage
+    % run_test.pl -tool ncsim -sim_mode rtl_sim -fl file_list.fl -coverage -regression test_list.fl
+
+    e.g for running rtl simulation in gui mode and enable dumping of waveforms
+    % run_test.pl -tool ncsim -sim_mode rtl_sim -fl file_list.fl -gui -dump
+  
+      
+  Regression Testlist list
+  -------------------------
+  1. UVM_TESTNAME            UVM_TIMEOUT     UVM_VERBOSITY     SV_SEED 
+     Eg) nandco4_sdr_test    1000000000      UVM_DEBUG         random
+ 
+  2. UVM_TESTNAME            UVM_TIMEOUT     UVM_VERBOSITY     SV_SEED  +DEFINE
+   Eg) nandco4_sdr_test      1000000000      UVM_DEBUG         random   +define+UHS_2 +define+SHP_DATAWIDTH64
+
+Note:
+-----
+1. If Regression list contains any define statment, regression need to be compiled again and the regression should be run for the particular case only
+2. log file name should be testname_seedvalue_time_date.log
+3. Every test completes the regression INCA_libs, wave_dump should be deleted if testcase passed.
+4. Log file should have the simulation start, end and CPU usage information.
+   Hint) irun -perfstat
+5. Every test completes the simulation, passed and failed log information should be moved to the appropriate directory
+   logs/rtl_sim/passed
+   logs/rtl_sim/failed
+   Report should be updated in xls format in the below mentioned path
+   logs/rtl_sim/report/report_rtl_sim.xls
+   report_rtl_sim should have the following information
+   1. Test Name
+   2. Passed or failed
+   3. Cpu usage info
+   4. Simulation start time
+   5. Simualtion end time.
+   6. Howmuch time taken for simualation
+   7. seed value
+   8. test start date
+   9. test end date
+      
+6. Every test completes the simulation, log files should be gun zipped.
+7. Failed testcase list should be generated along with the configuration to run the failed testcase again.
+8. Regression should be submitted through PBS based on the machine availability. i.e) All testcase should be run concurrently.
+   
+Coverage
+---------
+1. If coverage option is enabled, Once all regression got over the coverage report should be generated automatically.
+2. Coverage option should be configured through the cov_config.tcl
+
+
+
+  
+  
+  
