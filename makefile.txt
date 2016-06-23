@@ -1,0 +1,12 @@
+
+test = top_test
+mode = rtl_sim
+
+single : test.pl 
+	perl test.pl -vtimescale 1ns/10ps -tool ncsim -ftb tb_list.txt -inc inclist.txt -frtl files.f -test $(test) -sim_mode $(mode) -vip vip_lib -options options.fl -deflist deflist.fl 
+single_excel : test.pl 
+	perl test.pl -vtimescale 1ns/10ps -tool ncsim -ftb tb_list.txt -inc inclist.txt -frtl files.f -test $(test) -sim_mode $(mode) -excel -vip vip_lib -options options.fl -deflist deflist.fl 
+reg : test.pl 
+	perl test.pl -vtimescale 1ns/10ps -tool ncsim -ftb tb_list.txt -inc inclist.txt -frtl files.f -reg reglist.fl -sim_mode $(mode) -vip vip_lib -options options.fl -deflist deflist.fl 
+reg_excel : test.pl 
+	perl test.pl -vtimescale 1ns/10ps -tool ncsim -ftb tb_list.txt -inc inclist.txt -frtl files.f -reg reglist.fl -sim_mode $(mode) -excel -vip vip_lib -options options.fl -deflist deflist.fl 
